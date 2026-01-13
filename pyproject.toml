@@ -1,0 +1,12 @@
+[tool.gha-update]
+tag-only = [
+    "actions/checkout",
+    "actions/download-artifact",
+    "actions/setup-python",
+    "actions/upload-artifact",
+    "docker/build-push-action",
+    "docker/login-action",
+    "docker/setup-buildx-action",
+    "docker/setup-qemu-action",
+    "pre-commit/action",
+]
