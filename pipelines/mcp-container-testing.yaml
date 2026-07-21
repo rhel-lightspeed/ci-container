@@ -29,6 +29,7 @@ spec:
       params:
         - name: SNAPSHOT
           value: $(params.SNAPSHOT)
+
       taskSpec:
         params:
           - name: SNAPSHOT
@@ -40,13 +41,13 @@ spec:
           - name: extract
             image: quay.io/rhel_lightspeed/ci:latest
             env:
-              - name: SNAPSHOT_DATA
+              - name: SNAPSHOT
                 value: $(params.SNAPSHOT)
+
             script: |
               #!/usr/bin/env bash
               set -euo pipefail
-              printf '%s' "$SNAPSHOT_DATA" | \
-                jq -r '.components[0].containerImage' | \
+              jq -r '.components[0].containerImage' <<< "$SNAPSHOT" | \
                 tr -d '\n' > $(results.clean_url.path)
 
               echo "Extracted Image: $(cat $(results.clean_url.path))"
