@@ -29,6 +29,7 @@ spec:
       params:
         - name: SNAPSHOT
           value: $(params.SNAPSHOT)
+
       taskSpec:
         params:
           - name: SNAPSHOT
@@ -39,14 +40,16 @@ spec:
         steps:
           - name: extract
             image: quay.io/rhel_lightspeed/ci:latest
+            env:
+              - name: SNAPSHOT
+                value: $(params.SNAPSHOT)
+
             script: |
               #!/usr/bin/env bash
-              # Use a Here-Doc to avoid quote nesting issues
-              cat << 'EOF' | jq -r '.components[0].containerImage' | tr -d '\n' > $(results.clean_url.path)
-              $(params.SNAPSHOT)
-              EOF
+              set -euo pipefail
+              jq -r '.components[0].containerImage' <<< "$SNAPSHOT" | \
+                tr -d '\n' > $(results.clean_url.path)
 
-              # Debugging: show what we found in the logs
               echo "Extracted Image: $(cat $(results.clean_url.path))"
 
     - name: mcp-protocol-audit
