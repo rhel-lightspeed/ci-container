@@ -26,7 +26,7 @@ jobs:
           env | sort
 
       - name: Update base image
-        run: files/bin/update-image-refs.py
+        run: files/bin/update-image-refs.py -d
 
       - name: Open a PR if changes were made
         env:

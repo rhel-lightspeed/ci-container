@@ -8,6 +8,7 @@ RUN microdnf -y --nodocs install \
         jq \
         nc \
         podman \
+        python3 \
         socat \
     && microdnf clean all
 

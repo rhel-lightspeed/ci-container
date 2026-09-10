@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+
 import argparse
 import json
 import math
@@ -167,9 +168,6 @@ def filter_tags(
     reverse: bool = True,
     max_tag_length: int = 128,
 ) -> list[dict[str, t.Any]]:
-    # operator.itemgetter will return a tuple of items if passed a list of items to get.
-    # This means the value used to sort will look like ('0.7', 1765550189).
-    #
     exclude = {"unknown"}
     return sorted(
         (
