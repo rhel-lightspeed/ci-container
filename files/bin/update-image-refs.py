@@ -1,344 +1,283 @@
 #!/usr/bin/env python
+
 import argparse
+import dataclasses
+import datetime
 import json
-import math
+import re
 import sys
-import textwrap
 import typing as t
 import urllib.request
-
-from concurrent.futures import as_completed
-from concurrent.futures import ThreadPoolExecutor
-from enum import StrEnum
-from itertools import islice
 from pathlib import Path
 
 
-try:
-    import argcomplete  # pyright: ignore[reportMissingImports]
-except ImportError:
-    argcomplete = None
+def parse_from_line(line: str) -> tuple[str, ...] | None:
+    # Parse a FROM statement into components. This works with simple specifications
+    # such as "FROM nginx" up to more complex specifications such as:
+    #   FROM registry.access.redhat.com/ubi10-minimal:latest@sha256:d801168f5e8b108586c27a4fd5c92e3c1e8d061084383713926e2ca61b8b6c64
+    image_re = re.compile(
+        r"^FROM\s+"
+        r"(?:(?P<registry>[^/]+)/)?"
+        r"(?P<image>[^:@]+)"
+        r"(?::(?P<tag>[^@]+?))?"
+        r"(?:@(?P<digest>[a-z0-9:]+))?"
+        r"(?:(?P<suffix>\s+AS.+))?$"
+    )
+
+    if match := image_re.match(line):
+        return match.groups()
 
 
-def _batched(iterable: t.Iterable, batch_size: int) -> t.Iterable[tuple[t.Any, ...]]:
-    """Yield batches based on chunk size.
+def fetch_tags(
+    registry: str | None,
+    image: str,
+    start_tag: str,
+    limit: int = 100,
+) -> list[str]:
+    count = 0
+    tags = []
+    last = start_tag
+    while count < limit:
+        url = f"https://{registry or 'registry-1.docker.io'}/v2/{image}/tags/list?last={last}"
+        with urllib.request.urlopen(url, timeout=30) as response:
+            data = json.loads(response.read().decode())
 
-    Roughly equivalent to itertools.batched in Python >= 3.12.
-    https://docs.python.org/3/library/itertools.html#itertools.batched
-    """
+        current_tags = data.get("tags", [])
+        if not current_tags:
+            break
 
-    if batch_size < 1:
-        raise ValueError("Batch size must be at least 1.")
+        remaining = limit - count
+        tags.extend(current_tags[:remaining])
+        count += min(len(current_tags), remaining)
+        next_last = current_tags[-1]
+        if next_last == last:
+            break
 
-    iterator = iter(iterable)
-    while batch := tuple(islice(iterator, batch_size)):
-        yield batch
+        last = next_last
 
-
-try:
-    from itertools import batched
-except ImportError:
-    batched = _batched
-
-
-QUAYIO = "quay.io/"
-
-
-class Color(StrEnum):
-    reset = "\033[0m"
-    red = "\033[31m"
-    green = "\033[32m"
-    yellow = "\033[33m"
-    blue = "\033[34m"
-    magenta = "\033[35m"
-    cyan = "\033[36m"
-    white = "\033[37m"
-    br_red = "\033[91m"
-    br_green = "\033[92m"
-    br_yellow = "\033[93m"
-    br_blue = "\033[94m"
-    br_magenta = "\033[95m"
-    br_cyan = "\033[96m"
-    br_white = "\033[97m"
+    return tags
 
 
-class SeriesColors(StrEnum):
-    blue = "#0066cc"
-    red = "#c9190b"
-    green = "#4cb140"
-    yellow = "#f0ab00"
-    purple = "#6753ac"
-    teal = "#009596"
-    orange = "#ec7a08"
-    light_blue = "#2b9af3"
+def get_digest(registry: str, image: str, tag: str) -> str:
+    # Setting the header here is what gives the latest image hash.
+    url = f"https://{registry}/v2/{image}/manifests/{tag}"
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/vnd.oci.image.index.v1+json"}
+    )
+
+    with urllib.request.urlopen(request, timeout=30) as response:
+        digest = response.getheader("Docker-Content-Digest")
+
+    if digest is None:
+        raise ValueError(f"Unable to find digest for {registry}/{image}:{tag}.")
+
+    return digest
 
 
-def _positive_int(value):
-    validated = int(value)
-    if validated < 1:
-        raise ValueError("Must be positive")
+def extract_version_timestamp(tag: str) -> tuple[str, int]:
+    timestamp_re = re.compile(r"(\S+)-(\d{10,})-?")
+    if match := timestamp_re.match(tag):
+        version, timestamp = match.groups()
+        try:
+            return version, int(timestamp)
+        except ValueError:
+            print(f"Error extracting timestamp: {timestamp}")
 
-    return validated
+    return tag, 0
 
 
-def parse_args():
-    description = """
-    Update container refs in a file or list all tags.
+def find_latest_tag(
+    current_tag: str, version: str, timestamp: int, tags: list[str]
+) -> str:
+    current_version = version
+    latest_ts = timestamp
+    latest_tag = current_tag
+    for tag in tags:
+        version, ts = extract_version_timestamp(tag)
+        if version == current_version and ts > latest_ts:
+            latest_ts = ts
+            latest_tag = tag
 
-    By default, a new file is created with an '_updated' suffix. To make changes
-    to the original file, use the '--overwrite' argument.
+    return latest_tag
 
-    Tags are sorted by version and date in descending order.
 
-    Long tags are filetered out by default. This can be
-    adjusted with the '--tag-length' argument.
+def timestamp_to_date(tag: str) -> str | None:
+    _, ts = extract_version_timestamp(tag)
+    if ts:
+        dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
 
-    This is specifically for handling quay.io/konflux-ci images. It will not
-    work with other container registries or images.
-    """
+        return dt.strftime("%Y-%m-%d")
+
+
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=textwrap.dedent(description),
-        formatter_class=argparse.RawTextHelpFormatter,
+        description="Update base images in container files to latest tags"
     )
-    parser.register("type", "positive integer", _positive_int)
-    parser.add_argument("--file", "-f", required=False, type=Path)
     parser.add_argument(
-        "--image", "-i", required=False, help="Print out list of tags for a given image"
+        "directory",
+        nargs="?",
+        default=".",
+        type=Path,
+        help="Directory to search for container files (default: current directory)",
     )
-    parser.add_argument("--overwrite", "-o", action="store_true")
     parser.add_argument(
-        "--tag-length",
+        "--dry-run",
+        "-n",
+        action="store_true",
+        help="Show what would be updated without making changes",
+    )
+    parser.add_argument(
+        "--file",
+        "-f",
+        type=Path,
+        help="Container file to update",
+    )
+    parser.add_argument(
+        "--image",
+        "-i",
+        type=str,
+        help="Show latest blobs for image",
+    )
+    parser.add_argument(
+        "--limit",
         "-l",
-        default=12,
         type=int,
-        help="Tags greater than this length will be omitted",
+        default=100,
+        help="Maximum number of items to return when listing image details.",
     )
     parser.add_argument(
-        "--max-count",
-        "-m",
-        help="Maximum number of image tags to gather",
-        type=int,
-        default=50,
+        "--digest",
+        "-d",
+        action="store_true",
+        help="Add image digest",
     )
-    parser.add_argument(
-        "--workers",
-        "-t",
-        help="Number of concurrent workers",
-        type="positive integer",
-        default=16,
-    )
-
-    if argcomplete:
-        argcomplete.autocomplete(parser)
-
     return parser.parse_args()
 
 
-def image_tag_sort(value) -> tuple[int, ...]:
-    """Sort based on the version number in the tag and the creation date."""
+@dataclasses.dataclass
+class ImageUpdater:
+    args: argparse.Namespace
+    dry_run: bool = dataclasses.field(init=False)
+    total_updates: int = dataclasses.field(init=False, default=0)
+    _patterns: t.ClassVar[list[str]] = ["*Containerfile*", "*Dockerfile*"]
 
-    name = value.get("name", "").replace("-", ".")
-    name_parts = name.split(".")
-    if len(name_parts[-1]) > 16:
-        # This ends in a commit hash, not a number. Drop the hash.
-        # 0.6-622d10efb15c602b5e47d8fd98e374bb2c45c149
-        name_parts = name_parts[:-1]
+    def __post_init__(self):
+        self.dry_run = self.args.dry_run
 
-    # Version tags contain a varying number of parts. Some examples:
-    #   - 0.3.2-0
-    #   - 0.3
-    #   - 0.12.0
-    #   - 0.11.2-0
-    #
-    # Sort using a fixed length sequence.
-    #
-    # Pad the version sequence with zeros to always be four items long,
-    # such as (0, 3, 2, 0). The padding is necessary so that all values in
-    # each sequence are compared.
-    timestamp = value.get("start_ts", 0)
-    number_parts = 4
-    pad = [0] * number_parts
-    try:
-        padded_version = [int(n) for n in name_parts] + [*pad][:number_parts]
-        return tuple(padded_version + [timestamp])
-    except ValueError:
-        return tuple(pad + [timestamp])
+    @property
+    def container_files(self):
+        if self.args.file:
+            return [self.args.file]
 
+        if not self.args.directory.is_dir():
+            print(f"Error: {self.args.directory} is not a directory", file=sys.stderr)
+            sys.exit(1)
 
-def filter_tags(
-    tags: list[dict[str, t.Any]],
-    reverse: bool = True,
-    max_tag_length: int = 128,
-) -> list[dict[str, t.Any]]:
-    # operator.itemgetter will return a tuple of items if passed a list of items to get.
-    # This means the value used to sort will look like ('0.7', 1765550189).
-    #
-    exclude = {"unknown"}
-    return sorted(
-        (
-            item
-            for item in tags
-            if len(item["name"]) < max_tag_length and item["name"] not in exclude
-        ),
-        key=image_tag_sort,
-        reverse=reverse,
-    )
+        files = []
+        for pattern in self._patterns:
+            files.extend(self.args.directory.rglob(pattern))
 
+        return sorted(files)
 
-def get_tags(repository: str, max_count: int = 100) -> list[dict[str, t.Any]]:
-    if not repository:
-        sys.exit("Missing repo")
+    def process_file(self, filepath: Path) -> list[tuple[str, str, str]]:
+        print(f"Processing {filepath}...")
+        updates = []
+        lines = filepath.read_text().splitlines()
+        new_lines = []
+        date_comment_re = re.compile(r"^#\s*\d{4,4}-\d{2,2}-\d{2,2}")
+        for line in lines:
+            last_output_index = len(new_lines) - 1
+            if not (parsed := parse_from_line(line)):
+                new_lines.append(line)
+                continue
 
-    if repository.startswith(QUAYIO):
-        repository = repository.lstrip(QUAYIO)
+            registry, image, current_tag, digest, suffix = parsed
+            if not registry:
+                new_lines.append(line)
+                continue
 
-    quay_api_url = f"https://quay.io/api/v1/repository/{repository}/tag/"
+            # Image specs do not require a tag. In that case, only continue if the digest was requested
+            # and set the current_tag to "latest".
+            if current_tag is None and not self.args.digest:
+                new_lines.append(line)
+                continue
 
-    has_additional = True
-    all_tags = []
-    page = 1
-    while has_additional:
-        try:
-            with urllib.request.urlopen(f"{quay_api_url}?page={page}") as response:
-                data = response.read()
-        except urllib.request.HTTPError as err:
-            sys.exit(f"Error trying to get tags for {repository}: {err}")
+            latest_tag = current_tag or "latest"
+            version, timestamp = extract_version_timestamp(latest_tag)
+            if timestamp:
+                tags = fetch_tags(registry, image, current_tag)
+                latest_tag = find_latest_tag(current_tag, version, timestamp, tags)
+                new_timestamp = timestamp_to_date(latest_tag)
+                timestamp_comment = f"# {new_timestamp}"
+                if last_output_index >= 0 and date_comment_re.match(new_lines[last_output_index]):
+                    new_lines[last_output_index] = timestamp_comment
+                else:
+                    new_lines.append(timestamp_comment)
 
-        data = json.loads(data)
-        page = data.get("page", 1)
-        tags = data.get("tags", [])
-        all_tags.extend(tags)
+            digest_suffix = ""
+            if self.args.digest:
+                digest = get_digest(registry, image, latest_tag)
+                digest_suffix = f"@{digest}"
 
-        # Conditions that stop additional requests
-        has_additional = data.get("has_additional", False)
+            tag_suffix = f":{latest_tag}" if current_tag is not None else ""
+            updated_line = f"FROM {registry}/{image}{tag_suffix}{digest_suffix or ''}{suffix or ''}"
+            new_lines.append(updated_line)
+            if line != updated_line:
+                updates.append((f"{registry}/{image}", current_tag, latest_tag))
 
-        if len(all_tags) >= max_count:
-            break
+        if updates and not self.dry_run:
+            filepath.write_text("\n".join(new_lines) + "\n")
 
-        page += 1
+        return updates
 
-    return all_tags
+    def update(self):
+        if self.args.image:
+            # If the tag doesn't have a timestamp, just get the digest. It's a floating tag.
+            # If it does have a timestamp, use that as the last value and get the latest tag-timestamp,
+            # then get the digest
 
+            # Examples:
+            #   registry.access.redhat.com/hi/python:3.12
+            #   registry.access.redhat.com/hi/python:3.12-[timestamp]-builder
+            #   registry.access.redhat.com/hi/python:3.12-builder
+            #   registry.access.redhat.com/ubi10-minimal:10.2-1788137716
+            registry_image, _, tag = self.args.image.partition(":")
+            tag = tag or "latest"
+            registry, image = registry_image.split("/", 1)
+            version, timestamp = extract_version_timestamp(tag)
+            if timestamp:
+                tags = fetch_tags(registry, image, tag, self.args.limit)
+                tag = find_latest_tag(tag, version, timestamp, tags) or "latest"
 
-def get_latest_tag(repository: str, max_tag_length: int):
-    tags = get_tags(repository)
-    return filter_tags(tags, max_tag_length=max_tag_length)[0]
+            digest = get_digest(registry, image, tag)
+            print(f"{registry}/{image}:{tag}@{digest}")
 
+            sys.exit(0)
 
-def get_container_image_names(
-    repository: str, tags: list[dict[str, t.Any]]
-) -> list[str]:
-    # Get the padding size in order to make the name@digest section a consistent width
-    if not tags:
-        return []
+        if not self.container_files:
+            sys.exit("No container files found")
 
-    longest_name = max(len(tag["name"]) for tag in tags)
-    longest_digest = max(len(tag["manifest_digest"]) for tag in tags)
-    padding = longest_name + longest_digest
+        for filepath in self.container_files:
+            updates = self.process_file(filepath)
+            if updates:
+                print(f"{filepath}:")
+                for image, old_tag, new_tag in updates:
+                    print(f"  {image}:{old_tag} -> {new_tag}")
+                    self.total_updates += 1
 
-    return [
-        f"{Color.yellow}{repository}{Color.reset}"
-        f":{Color.blue}{tag['name']}{Color.reset}"
-        f"@{Color.magenta}{tag['manifest_digest']:{padding - len(tag['name'])}}{Color.reset}"
-        f"{tag['last_modified']:>33}"
-        for tag in tags
-    ]
-
-
-def parse_container_image(line) -> tuple[str, str, str]:
-    line = line.strip()
-    try:
-        # Remove the leading prefix if it exists and anything before it
-        line = line[line.index(QUAYIO) :]
-    except IndexError:
-        pass
-
-    # The image could only have the digest and not the tag
-    #   quay.io/konflux-ci/tekton-catalog/task-push-dockerfile@sha256:389dc0f7bb175b9ca04e79ee67352fedd62fff8b1d196029534cd5638c73a0fc
-    #   quay.io/konflux-ci/tekton-catalog/task-git-clone:0.1@sha256:d091a9e19567a4cbdc5acd57903c71ba71dc51d749a4ba7477e689608851e981',
-    #   quay.io/konflux-ci/tekton-catalog/task-git-clone:0.1
-
-    image, _, digest = line.partition("@")
-    image, _, tag = image.partition(":")
-
-    return image, tag, digest
-
-
-def array_split(lines: list[str], number: int) -> t.Iterable[tuple[str, ...]]:
-    if number < 1:
-        raise ValueError("number must be at least 1.")
-
-    chunk_size = math.ceil(len(lines) / number)
-    return batched(lines, chunk_size)
-
-
-def process_chunk(data: t.Iterable[str], max_tag_length: int) -> tuple[str, ...]:
-    updated = []
-    for line in data:
-        if "quay.io/konflux-ci" in line:
-            image, tag, digest = parse_container_image(line)
-            latest_tag = get_latest_tag(
-                image.lstrip(QUAYIO), max_tag_length=max_tag_length
-            )
-
-            print(f"Updating {image}", flush=True)
-
-            tag = f":{tag}" if tag else ""
-            digest = f"@{digest}" if digest else ""
-            current_image = f"{image}{tag}{digest}"
-
-            new_tag = f":{latest_tag['name']}" if tag else ""
-            new_digest = f"@{latest_tag['manifest_digest']}" if digest else ""
-            new_image = f"{image}{new_tag}{new_digest}"
-            line = line.replace(current_image, new_image)
-
-        updated.append(line)
-
-    return tuple(updated)
+        if self.total_updates == 0:
+            print("All base images are up to date")
+        elif self.dry_run:
+            print(f"\nWould update {self.total_updates} image(s)")
+        else:
+            print(f"\nUpdated {self.total_updates} image(s)")
 
 
 def main():
     args = parse_args()
 
-    file = args.file
-    container_image: str = args.image
-    overwrite = args.overwrite
-    max_tag_length = args.tag_length
-    max_count = args.max_count
-    workers = args.workers
-
-    if file:
-        file_content = file.read_text().splitlines()
-        output_file = file.with_name(f"{file.stem}_updated{file.suffix}")
-        if overwrite:
-            output_file = file
-
-        chunks = array_split(file_content, workers)
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            # Use future objects as a key to preserve submission order.
-            future_chunks = {
-                executor.submit(process_chunk, chunk, max_tag_length): chunk
-                for chunk in chunks
-            }
-            for future in as_completed(future_chunks):
-                try:
-                    future_chunks[future] = future.result()
-                except Exception as exc:
-                    print(
-                        f"Problem getting data. Not all references were updated. {exc}."
-                    )
-
-        # Reassemble the lines in the order they were submitted.
-        updated = [n for lines in future_chunks.values() for n in lines]
-        output_file.write_text("\n".join(updated) + "\n")
-        sys.exit()
-
-    tags = get_tags(container_image, max_count)
-    filtered = filter_tags(tags, max_tag_length=max_tag_length)
-    images = get_container_image_names(container_image, filtered)
-
-    print(f"{container_image}:")
-    print(textwrap.indent("\n".join(images), " " * 4))
+    updater = ImageUpdater(args)
+    updater.update()
 
 
 if __name__ == "__main__":
