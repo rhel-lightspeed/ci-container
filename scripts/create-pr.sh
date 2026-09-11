@@ -9,7 +9,7 @@ fi
 
 git switch -c update-base-image
 git commit -i Containerfile -m "Update base image"
-git push
+git push "$(git remote | head -n 1)"
 
 PR_URL="$(gh pr create --title 'Update base image' --body '' | tail -n 1)" || exit $?
 
