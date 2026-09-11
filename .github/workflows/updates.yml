@@ -11,9 +11,18 @@ permissions:
   contents: write
 
 jobs:
-  update_base_image:
-    name: Update base image
+  update_refs:
+    name: Update - ${{ matrix.job.name }}
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - name: Base image
+            command: files/bin/update-image-refs -d
+            pr_title: Update base image
+            pr_file_check: Containerfile
 
     steps:
       - name: Checkout
@@ -21,8 +30,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Update base image
-        run: files/bin/update-image-refs -d
+      - name: Update
+        run: ${{ matrix.job.command }}
 
       - name: Open a PR if changes were made
         env:
@@ -31,4 +40,6 @@ jobs:
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_TITLE: ${{ matrix.job.pr_title }}
+          PR_FILE_CHECK: ${{ matrix.job.pr_file_check }}
         run: files/bin/create-pr
