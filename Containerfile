@@ -2,6 +2,7 @@
 FROM registry.access.redhat.com/ubi10-minimal:10.2-1788940913@sha256:26dc3089ab24491c1ba01ab92a7d502d181425b6021e362a07484daee696a3aa
 
 ARG UID=1001
+ARG TARGETARCH
 
 RUN microdnf -y --nodocs install \
         git \
@@ -10,7 +11,8 @@ RUN microdnf -y --nodocs install \
         podman \
         python3 \
         socat \
-    && microdnf clean all
+    && microdnf clean all \
+    && rpm -Uvh https://github.com/cli/cli/releases/download/v2.100.0/gh_2.100.0_linux_${TARGETARCH}.rpm
 
 ADD files/bin /usr/local/bin
 
