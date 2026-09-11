@@ -13,4 +13,5 @@ git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${G
 git push origin HEAD
 
 PR_URL="$(gh pr create --title 'Update base image' --body '' | tail -n 1)" || exit $?
+gh pr review --approve "$PR_URL"
 gh pr merge --auto --squash "$PR_URL"
