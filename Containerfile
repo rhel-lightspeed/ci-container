@@ -1,5 +1,5 @@
-# 2026-07-20
-FROM registry.access.redhat.com/ubi10-minimal:10.2-1784581369@sha256:1de153ac8a6cb7793a57c837d5cb290c9a14296cb88d07fc3cc1a400f84d9231
+# 2026-09-09
+FROM registry.access.redhat.com/ubi10-minimal:10.2-1788940913@sha256:26dc3089ab24491c1ba01ab92a7d502d181425b6021e362a07484daee696a3aa
 
 ARG UID=1001
 
