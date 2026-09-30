@@ -7,6 +7,7 @@ ARG TARGETARCH
 RUN microdnf -y --nodocs install \
         git \
         jq \
+        make \
         nc \
         podman \
         python3 \
