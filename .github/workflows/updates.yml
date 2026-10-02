@@ -23,6 +23,7 @@ jobs:
             command: files/bin/update-image-refs -d
             pr_title: Update base image
             pr_file_check: Containerfile
+            pr_branch: update-base-image
 
     steps:
       - name: Checkout
@@ -42,4 +43,5 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_TITLE: ${{ matrix.job.pr_title }}
           PR_FILE_CHECK: ${{ matrix.job.pr_file_check }}
+          PR_BRANCH: ${{ matrix.job.pr_branch }}
         run: files/bin/create-pr
