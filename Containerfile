@@ -1,5 +1,5 @@
-# 2026-09-09
-FROM registry.access.redhat.com/ubi10-minimal:10.2-1788940913@sha256:26dc3089ab24491c1ba01ab92a7d502d181425b6021e362a07484daee696a3aa
+# 2026-09-30
+FROM registry.access.redhat.com/ubi10-minimal:10.2-1790753097@sha256:204e1531cee54562b107fb31e0b327062fc3d5d67af7cc0d2e66b2c572b9044f
 
 ARG UID=1001
 ARG TARGETARCH
