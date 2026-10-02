@@ -3,6 +3,7 @@ FROM registry.access.redhat.com/ubi10-minimal:10.2-1790753097@sha256:204e1531cee
 
 ARG UID=1001
 ARG TARGETARCH
+ARG RLP_VERSION=0.30.1
 
 RUN microdnf -y --nodocs install \
         git \
@@ -11,9 +12,16 @@ RUN microdnf -y --nodocs install \
         nc \
         podman \
         python3 \
+        python3-dnf \
         socat \
+        skopeo \
     && microdnf clean all \
     && rpm -Uvh https://github.com/cli/cli/releases/download/v2.100.0/gh_2.100.0_linux_${TARGETARCH}.rpm
+
+# Install rpm-lockfile-prototype for building an rpm lock file.
+RUN python -m venv --system-site-packages /opt/venvs/rpm-lockfile \
+    && /opt/venvs/rpm-lockfile/bin/pip install https://github.com/konflux-ci/rpm-lockfile-prototype/archive/refs/tags/v${RLP_VERSION}.tar.gz \
+    && ln -s /opt/venvs/rpm-lockfile/bin/rpm-lockfile-prototype /usr/local/bin
 
 ADD files/bin /usr/local/bin
 
