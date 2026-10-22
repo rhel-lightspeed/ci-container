@@ -174,8 +174,7 @@ class ImageUpdater:
             return [self.args.file]
 
         if not self.args.directory.is_dir():
-            print(f"Error: {self.args.directory} is not a directory", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(f"Error: {self.args.directory} is not a directory")
 
         files = []
         for pattern in self._patterns:
