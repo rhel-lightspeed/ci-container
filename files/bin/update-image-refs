@@ -280,10 +280,10 @@ class ImageUpdater:
 
         if self.total_updates == 0:
             print("All base images are up to date")
-        elif self.dry_run:
-            print(f"\nWould update {self.total_updates} image(s)")
         else:
-            print(f"\nUpdated {self.total_updates} image(s)")
+            prefix = "Would update" if self.dry_run else "Updated"
+            plural = "s" if self.total_updates > 1 else ""
+            print(f"\n{prefix} {self.total_updates} image reference{plural}.")
 
 
 def main():
