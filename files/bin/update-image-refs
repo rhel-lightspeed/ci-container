@@ -8,6 +8,7 @@ import re
 import sys
 import typing as t
 import urllib.request
+from functools import cached_property
 from pathlib import Path
 
 
@@ -168,7 +169,7 @@ class ImageUpdater:
     def __post_init__(self):
         self.dry_run = self.args.dry_run
 
-    @property
+    @cached_property
     def container_files(self):
         if self.args.file:
             return [self.args.file]
