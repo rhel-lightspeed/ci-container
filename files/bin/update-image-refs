@@ -276,7 +276,8 @@ class ImageUpdater:
 
         for filepath in self.container_files:
             if updates := self.process_file(filepath):
-                print(f"{filepath.relative_to(self.args.directory)}:")
+                file_display_name = self.args.file.name if self.args.file else filepath.relative_to(self.args.directory)
+                print(f"{file_display_name}:")
                 for image, old_tag, new_tag in updates:
                     print(f"  ↳{image}:{old_tag} → {new_tag}")
                     self.total_updates += 1
