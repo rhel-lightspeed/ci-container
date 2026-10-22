@@ -188,7 +188,6 @@ class ImageUpdater:
         return sorted(files)
 
     def process_file(self, filepath: Path) -> list[tuple[str, str, str]]:
-        print(f"Processing {filepath}...")
         updates = []
         lines = filepath.read_text().splitlines()
         new_lines = []
@@ -231,7 +230,7 @@ class ImageUpdater:
             updated_line = f"FROM {registry}/{image}{tag_suffix}{digest_suffix or ''}{suffix or ''}"
             new_lines.append(updated_line)
             if line != updated_line:
-                updates.append((f"{registry}/{image}", current_tag, latest_tag))
+                updates.append((f"{registry}/{image}", current_tag, f"{latest_tag}{digest_suffix}"))
 
         if updates and not self.dry_run:
             filepath.write_text("\n".join(new_lines) + "\n")
@@ -266,11 +265,10 @@ class ImageUpdater:
             sys.exit("No container files found")
 
         for filepath in self.container_files:
-            updates = self.process_file(filepath)
-            if updates:
-                print(f"{filepath}:")
+            if updates := self.process_file(filepath):
+                print(f"{filepath.relative_to(self.args.directory)}:")
                 for image, old_tag, new_tag in updates:
-                    print(f"  {image}:{old_tag} -> {new_tag}")
+                    print(f"  ↳{image}:{old_tag} → {new_tag}")
                     self.total_updates += 1
 
         if self.total_updates == 0:
