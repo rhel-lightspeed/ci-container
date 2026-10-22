@@ -177,8 +177,12 @@ class ImageUpdater:
             sys.exit(f"Error: {self.args.directory} is not a directory")
 
         files = []
-        for pattern in self._patterns:
-            files.extend(self.args.directory.rglob(pattern))
+        for dirpath, dirnames, filenames in self.args.directory.walk():
+            # Ignore hidden directories
+            dirnames[:] = [dir for dir in dirnames if not dir.startswith(".")]
+
+            for pattern in self._patterns:
+                files.extend(dirpath.glob(pattern))
 
         return sorted(files)
 
