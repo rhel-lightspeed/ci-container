@@ -109,6 +109,10 @@ def timestamp_to_date(tag: str) -> str | None:
         return dt.strftime("%Y-%m-%d")
 
 
+def realpath(path: str) -> Path:
+    return Path(path).resolve()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Update base images in container files to latest tags"
@@ -117,7 +121,7 @@ def parse_args() -> argparse.Namespace:
         "directory",
         nargs="?",
         default=".",
-        type=Path,
+        type=realpath,
         help="Directory to search for container files (default: current directory)",
     )
     parser.add_argument(
@@ -129,7 +133,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--file",
         "-f",
-        type=Path,
+        type=realpath,
         help="Container file to update",
     )
     parser.add_argument(
