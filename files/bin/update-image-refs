@@ -10,6 +10,7 @@ import typing as t
 import urllib.request
 from functools import cached_property
 from pathlib import Path
+from urllib.error import HTTPError
 
 
 def parse_from_line(line: str) -> tuple[str, ...] | None:
@@ -40,8 +41,11 @@ def fetch_tags(
     last = start_tag
     while count < limit:
         url = f"https://{registry or 'registry-1.docker.io'}/v2/{image}/tags/list?last={last}"
-        with urllib.request.urlopen(url, timeout=30) as response:
-            data = json.loads(response.read().decode())
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response:
+                data = json.loads(response.read().decode())
+        except HTTPError as err:
+            sys.exit(f"Error fetching tags from {url}: {err}")
 
         current_tags = data.get("tags", [])
         if not current_tags:
@@ -66,8 +70,11 @@ def get_digest(registry: str, image: str, tag: str) -> str:
         url, headers={"Accept": "application/vnd.oci.image.index.v1+json"}
     )
 
-    with urllib.request.urlopen(request, timeout=30) as response:
-        digest = response.getheader("Docker-Content-Digest")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            digest = response.getheader("Docker-Content-Digest")
+    except HTTPError as err:
+        sys.exit(str(err))
 
     if digest is None:
         raise ValueError(f"Unable to find digest for {registry}/{image}:{tag}.")
