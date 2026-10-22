@@ -8,7 +8,9 @@ import re
 import sys
 import typing as t
 import urllib.request
+from functools import cached_property
 from pathlib import Path
+from urllib.error import HTTPError
 
 
 def parse_from_line(line: str) -> tuple[str, ...] | None:
@@ -39,8 +41,11 @@ def fetch_tags(
     last = start_tag
     while count < limit:
         url = f"https://{registry or 'registry-1.docker.io'}/v2/{image}/tags/list?last={last}"
-        with urllib.request.urlopen(url, timeout=30) as response:
-            data = json.loads(response.read().decode())
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response:
+                data = json.loads(response.read().decode())
+        except HTTPError as err:
+            sys.exit(f"Error fetching tags from {url}: {err}")
 
         current_tags = data.get("tags", [])
         if not current_tags:
@@ -65,8 +70,11 @@ def get_digest(registry: str, image: str, tag: str) -> str:
         url, headers={"Accept": "application/vnd.oci.image.index.v1+json"}
     )
 
-    with urllib.request.urlopen(request, timeout=30) as response:
-        digest = response.getheader("Docker-Content-Digest")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            digest = response.getheader("Docker-Content-Digest")
+    except HTTPError as err:
+        sys.exit(str(err))
 
     if digest is None:
         raise ValueError(f"Unable to find digest for {registry}/{image}:{tag}.")
@@ -109,6 +117,10 @@ def timestamp_to_date(tag: str) -> str | None:
         return dt.strftime("%Y-%m-%d")
 
 
+def realpath(path: str) -> Path:
+    return Path(path).resolve()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Update base images in container files to latest tags"
@@ -117,7 +129,7 @@ def parse_args() -> argparse.Namespace:
         "directory",
         nargs="?",
         default=".",
-        type=Path,
+        type=realpath,
         help="Directory to search for container files (default: current directory)",
     )
     parser.add_argument(
@@ -129,7 +141,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--file",
         "-f",
-        type=Path,
+        type=realpath,
         help="Container file to update",
     )
     parser.add_argument(
@@ -164,23 +176,28 @@ class ImageUpdater:
     def __post_init__(self):
         self.dry_run = self.args.dry_run
 
-    @property
+    @cached_property
     def container_files(self):
         if self.args.file:
+            if not self.args.file.is_file():
+                sys.exit(f"Error: {self.args.file} is not a file or does not exist")
+
             return [self.args.file]
 
         if not self.args.directory.is_dir():
-            print(f"Error: {self.args.directory} is not a directory", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(f"Error: {self.args.directory} is not a directory or does not exist")
 
         files = []
-        for pattern in self._patterns:
-            files.extend(self.args.directory.rglob(pattern))
+        for dirpath, dirnames, filenames in self.args.directory.walk():
+            # Ignore hidden directories
+            dirnames[:] = [dir for dir in dirnames if not dir.startswith(".")]
+
+            for pattern in self._patterns:
+                files.extend(dirpath.glob(pattern))
 
         return sorted(files)
 
     def process_file(self, filepath: Path) -> list[tuple[str, str, str]]:
-        print(f"Processing {filepath}...")
         updates = []
         lines = filepath.read_text().splitlines()
         new_lines = []
@@ -223,7 +240,7 @@ class ImageUpdater:
             updated_line = f"FROM {registry}/{image}{tag_suffix}{digest_suffix or ''}{suffix or ''}"
             new_lines.append(updated_line)
             if line != updated_line:
-                updates.append((f"{registry}/{image}", current_tag, latest_tag))
+                updates.append((f"{registry}/{image}", current_tag, f"{latest_tag}{digest_suffix}"))
 
         if updates and not self.dry_run:
             filepath.write_text("\n".join(new_lines) + "\n")
@@ -258,19 +275,19 @@ class ImageUpdater:
             sys.exit("No container files found")
 
         for filepath in self.container_files:
-            updates = self.process_file(filepath)
-            if updates:
-                print(f"{filepath}:")
+            if updates := self.process_file(filepath):
+                file_display_name = self.args.file.name if self.args.file else filepath.relative_to(self.args.directory)
+                print(f"{file_display_name}:")
                 for image, old_tag, new_tag in updates:
-                    print(f"  {image}:{old_tag} -> {new_tag}")
+                    print(f"  ↳{image}:{old_tag} → {new_tag}")
                     self.total_updates += 1
 
         if self.total_updates == 0:
             print("All base images are up to date")
-        elif self.dry_run:
-            print(f"\nWould update {self.total_updates} image(s)")
         else:
-            print(f"\nUpdated {self.total_updates} image(s)")
+            prefix = "Would update" if self.dry_run else "Updated"
+            plural = "s" if self.total_updates > 1 else ""
+            print(f"\n{prefix} {self.total_updates} image reference{plural}.")
 
 
 def main():
