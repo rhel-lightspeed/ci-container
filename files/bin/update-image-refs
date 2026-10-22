@@ -179,10 +179,13 @@ class ImageUpdater:
     @cached_property
     def container_files(self):
         if self.args.file:
+            if not self.args.file.is_file():
+                sys.exit(f"Error: {self.args.file} is not a file or does not exist")
+
             return [self.args.file]
 
         if not self.args.directory.is_dir():
-            sys.exit(f"Error: {self.args.directory} is not a directory")
+            sys.exit(f"Error: {self.args.directory} is not a directory or does not exist")
 
         files = []
         for dirpath, dirnames, filenames in self.args.directory.walk():
