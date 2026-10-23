@@ -5,16 +5,17 @@ ARG UID=1001
 ARG TARGETARCH
 ARG RLP_VERSION=0.30.1
 
-RUN microdnf -y --nodocs install \
+RUN microdnf -y --nodocs --setopt install_weak_deps=0 install \
         git \
         jq \
         make \
         nc \
         podman \
+        python-unversioned-command \
         python3 \
         python3-dnf \
-        socat \
         skopeo \
+        socat \
     && microdnf clean all \
     && rpm -Uvh https://github.com/cli/cli/releases/download/v2.100.0/gh_2.100.0_linux_${TARGETARCH}.rpm
 
